@@ -37,17 +37,12 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
             query_id, from_id, query_string = telepot.glance(msg, flavor='inline_query')
             print(self.id, ':', 'Inline Query:', query_id, from_id, query_string)
 
+            start_time = datetime.datetime.now()
             articles = get_photos_from_gatherer(query_string)
-
+            print('took', datetime.datetime.now() - start_time)
             return articles
 
         self.answerer.answer(msg, compute_answer)
-
-    def on_chosen_inline_result(self, msg):
-        from pprint import pprint
-        pprint(msg)
-        result_id, from_id, query_string = telepot.glance(msg, flavor='chosen_inline_result')
-        print(self.id, ':', 'Chosen Inline Result:', result_id, from_id, query_string)
 
 
 def get_photos_from_gatherer(query_string: str):
@@ -143,9 +138,9 @@ loop = asyncio.get_event_loop()
 
 parser = argparse.ArgumentParser(description='MTG Card Image Fetch Telegram Bot')
 parser.add_argument('token', type=str, metavar='T', help='The Telegram Bot API Token')
-# args = parser.parse_args()
+args = parser.parse_args()
 
-# TOKEN = args.token
+TOKEN = args.token
 
 bot = telepot.aio.DelegatorBot(TOKEN, [
     pave_event_space()(
