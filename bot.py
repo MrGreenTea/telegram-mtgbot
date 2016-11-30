@@ -2,14 +2,16 @@ import argparse
 import asyncio
 import datetime
 import glob
+import heapq
 import json
+import operator
 import os
 import re
 
 import requests
 import telepot
 import telepot.aio
-from fuzzywuzzy import process
+from fuzzywuzzy import fuzz
 from mtgsdk import cards, sets, changelog
 from telepot.aio.delegate import per_inline_from_id, create_open, pave_event_space
 from telepot.aio.helper import InlineUserHandler, AnswererMixin
@@ -49,7 +51,13 @@ def get_photos_from_gatherer(query_string: str):
     if not query_string:
         return []
 
-    matches = process.extract(query_string, card_data, limit=10)
+    def match(name):
+        return fuzz.token_set_ratio(query_string, name)
+
+    # matches = process.extract(query_string, card_data, limit=8)
+    matches = heapq.nlargest(8,
+                             zip(card_data.values(), map(match, card_data), card_data.keys()),
+                             key=operator.itemgetter(1))
 
     return [
         InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=name)
@@ -134,20 +142,22 @@ def update_data():
 
 update_data()
 
-loop = asyncio.get_event_loop()
 
-parser = argparse.ArgumentParser(description='MTG Card Image Fetch Telegram Bot')
-parser.add_argument('token', type=str, metavar='T', help='The Telegram Bot API Token')
-args = parser.parse_args()
+if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
 
-TOKEN = args.token
+    parser = argparse.ArgumentParser(description='MTG Card Image Fetch Telegram Bot')
+    parser.add_argument('token', type=str, metavar='T', help='The Telegram Bot API Token')
+    args = parser.parse_args()
 
-bot = telepot.aio.DelegatorBot(TOKEN, [
-    pave_event_space()(
-        per_inline_from_id(), create_open, InlineHandler, timeout=20),
-])
+    TOKEN = args.token
 
-loop.create_task(bot.message_loop())
-print('Listening ...')
+    bot = telepot.aio.DelegatorBot(TOKEN, [
+        pave_event_space()(
+            per_inline_from_id(), create_open, InlineHandler, timeout=20),
+    ])
 
-loop.run_forever()
+    loop.create_task(bot.message_loop())
+    print('Listening ...')
+
+    loop.run_forever()
