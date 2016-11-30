@@ -4,9 +4,9 @@ import datetime
 import glob
 import heapq
 import json
-import operator
 import os
 import re
+import random
 
 import requests
 import telepot
@@ -49,20 +49,22 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
 
 def get_photos_from_gatherer(query_string: str):
     if not query_string:
-        return []
+        matches = random.sample(list(card_data.values()), 8)
+    else:
+        def match(card):
+            """We match first by fuzz.ratio and then by length difference."""
+            name = card.name
+            try:
+                len_ratio = 1 / abs(len(query_string) - len(name))
+            except ZeroDivisionError:
+                len_ratio = float('inf')
 
-    def match(name):
-        return fuzz.token_set_ratio(query_string, name)
+            return fuzz.token_set_ratio(query_string, card.name), len_ratio
 
-    # matches = process.extract(query_string, card_data, limit=8)
-    matches = heapq.nlargest(8,
-                             zip(card_data.values(), map(match, card_data), card_data.keys()),
-                             key=operator.itemgetter(1))
+        matches = heapq.nlargest(8, card_data.values(), key=match)
 
-    return [
-        InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=name)
-        for card, value, name in matches
-        ]
+    return [InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=card.name)
+            for card in matches]
 
 
 def newest_json_file():
@@ -89,12 +91,13 @@ def is_newest_version():
 
     print(highest_version)
 
-    remote_newest_version = changelog.newest_version()['version']
+    remote_newest_version = changelog.newest_version().version
     print(remote_newest_version)
     return remote_newest_version == highest_version
 
 
 def update_set_info():
+    print('Updating sets.')
     for set in sets.search():
         set.release_date = datetime.datetime.strptime(set.release_date, '%Y-%m-%d')
         set_data[set.code] = set
@@ -112,7 +115,7 @@ def update_card_info():
         if card.name in card_data:
             new_set = set_data[card.set]
             cur_set = set_data[card_data[card.name].set]
-            if new_set.release_date > cur_set.release_date:
+            if new_set.release_date <= cur_set.release_date:
                 continue
 
         card_data[card.name] = card
@@ -125,11 +128,10 @@ def update_data():
 
     update_set_info()
 
+    print('Updating cards.')
     if not is_newest_version():
-        print('update')
-
         update_card_info()
-        new_version = changelog.newest_version()['version']
+        new_version = changelog.newest_version().version
         json_file_path = os.path.join(FILE_DIR, 'cards_{}.json'.format(new_version))
         with open(json_file_path, 'w') as json_file:
             json.dump(dicttoolz.valmap(lambda c: c.__dict__, card_data), json_file)
@@ -142,12 +144,11 @@ def update_data():
 
 update_data()
 
-
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
 
     parser = argparse.ArgumentParser(description='MTG Card Image Fetch Telegram Bot')
-    parser.add_argument('token', type=str, metavar='T', help='The Telegram Bot API Token')
+    parser.add_argument('token', type=str, metavar='t', help='The Telegram Bot API Token')
     args = parser.parse_args()
 
     TOKEN = args.token
