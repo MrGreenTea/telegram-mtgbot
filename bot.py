@@ -54,7 +54,7 @@ def get_photos_from_gatherer(query_string: str):
     else:
         def match(card):
             """We match first by fuzz.ratio and then by length difference."""
-            name = card.name.lower()
+            name = card.name.lower()  # type: str
             consecutive_score = 0
             for c in query_string.lower():
                 try:
@@ -71,11 +71,18 @@ def get_photos_from_gatherer(query_string: str):
                 print(name)
                 len_ratio = 0
 
-            return fuzz.WRatio(query_string, name), 1 / consecutive_score, len_ratio
+            full = name.find(query_string)
+            if full < 0:
+                full = name.find(query_string.lower())
+                if full < 0:
+                    full = float('inf')
+
+            return fuzz.WRatio(query_string, name), full, 1 / consecutive_score, len_ratio
 
         matches = heapq.nlargest(8, card_data.values(), key=match)
 
-    return [InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=card.name)
+    return [InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=card.name,
+                                   photo_width=223, photo_height=311)
             for card in matches]
 
 
