@@ -115,24 +115,6 @@ def update_set_info():
         set_data[set.code] = set
 
 
-def get_best_image(card: cards.Card):
-    if card.number is None:
-        return card.image_url
-
-    magic_info_set_code = set_data[card.set].magic_cards_info_code
-    if magic_info_set_code is None:
-        magic_info_set_code = card.set.lower()
-
-    url = 'http://magiccards.info/scans/en/{code}/{num}.jpg'.format(code=magic_info_set_code, num=card.number)
-    r = requests.head(url)
-    try:
-        r.raise_for_status()
-    except requests.HTTPError:
-        return card.image_url
-    else:
-        return url
-
-
 def update_card_info():
     start_time = datetime.datetime.now()
 
@@ -145,11 +127,8 @@ def update_card_info():
             if new_set.release_date <= cur_set.release_date:
                 continue
 
-        image = get_best_image(card)
-        if image is None:
+        if card.image_url is None:
             continue
-        else:
-            card.image_url = image
 
         card_data[card.name] = card
 
