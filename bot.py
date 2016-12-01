@@ -5,8 +5,9 @@ import glob
 import heapq
 import json
 import os
-import re
 import random
+import re
+from typing import Dict
 
 import requests
 import telepot
@@ -26,8 +27,8 @@ It demonstrates answering inline query and getting chosen inline results.
 
 FILE_DIR = os.path.dirname(__file__)
 
-set_data = {}
-card_data = {}
+set_data = {}  # type: Dict[str: sets.Set]
+card_data = {}  # type: Dict[str: cards.Card]
 
 
 class InlineHandler(InlineUserHandler, AnswererMixin):
@@ -114,20 +115,41 @@ def update_set_info():
         set_data[set.code] = set
 
 
+def get_best_image(card: cards.Card):
+    if card.number is None:
+        return card.image_url
+
+    magic_info_set_code = set_data[card.set].magic_cards_info_code
+    if magic_info_set_code is None:
+        magic_info_set_code = card.set.lower()
+
+    url = 'http://magiccards.info/scans/en/{code}/{num}.jpg'.format(code=magic_info_set_code, num=card.number)
+    r = requests.head(url)
+    try:
+        r.raise_for_status()
+    except requests.HTTPError:
+        return card.image_url
+    else:
+        return url
+
+
 def update_card_info():
     start_time = datetime.datetime.now()
 
-    total_card_count = int(requests.get('https://api.magicthegathering.io/v1/cards').headers['total-count'])
+    total_card_count = int(requests.head('https://api.magicthegathering.io/v1/cards').headers['total-count'])
 
     for card in tqdm(cards.search(), total=total_card_count):
-        if card.image_url is None:
-            continue
-
         if card.name in card_data:
             new_set = set_data[card.set]
             cur_set = set_data[card_data[card.name].set]
             if new_set.release_date <= cur_set.release_date:
                 continue
+
+        image = get_best_image(card)
+        if image is None:
+            continue
+        else:
+            card.image_url = image
 
         card_data[card.name] = card
 
@@ -157,7 +179,6 @@ update_data()
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
-
     parser = argparse.ArgumentParser(description='MTG Card Image Fetch Telegram Bot')
     parser.add_argument('token', type=str, metavar='t', help='The Telegram Bot API Token')
     args = parser.parse_args()
