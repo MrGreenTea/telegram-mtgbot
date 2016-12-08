@@ -7,6 +7,7 @@ import json
 import os
 import random
 import re
+import functools
 from typing import Dict
 
 import requests
@@ -19,11 +20,6 @@ from telepot.aio.helper import InlineUserHandler, AnswererMixin
 from telepot.namedtuple import InlineQueryResultPhoto
 from toolz import dicttoolz
 from tqdm import tqdm
-
-"""
-$ python3.5 inlinea.py <token>
-It demonstrates answering inline query and getting chosen inline results.
-"""
 
 FILE_DIR = os.path.dirname(__file__)
 
@@ -48,38 +44,43 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
         self.answerer.answer(msg, compute_answer)
 
 
+def match(query: str, card: cards.Card):
+    name = card.name.lower()  # type: str
+    query = query.lower()
+
+    consecutive_score = 0
+    for c in query:
+        try:
+            while name[consecutive_score] != c:
+                consecutive_score += 1
+        except IndexError:
+            consecutive_score = -1
+            break
+    else:
+        consecutive_score = (consecutive_score + 1) / len(query)
+    try:
+        len_ratio = 1 / len(name)
+    except ZeroDivisionError:
+        print(name)
+        len_ratio = 0
+
+    full_words = len(set(name.split()).intersection(set(query.split())))
+
+    full = name.find(query)
+    if full < 0:
+        full = name.find(query)
+
+    if full >= 0:
+        full = 1 / (full + 1)
+
+    return fuzz.token_set_ratio(query, name), full_words, full, 1 / consecutive_score, len_ratio
+
+
 def get_photos_from_gatherer(query_string: str):
     if not query_string:
         matches = random.sample(list(card_data.values()), 8)
     else:
-        def match(card):
-            """We match first by fuzz.ratio and then by length difference."""
-            name = card.name.lower()  # type: str
-            consecutive_score = 0
-            for c in query_string.lower():
-                try:
-                    while name[consecutive_score] != c:
-                        consecutive_score += 1
-                except IndexError:
-                    consecutive_score = -1
-                    break
-            else:
-                consecutive_score = (consecutive_score + 1) / len(query_string)
-            try:
-                len_ratio = 1 / len(name)
-            except ZeroDivisionError:
-                print(name)
-                len_ratio = 0
-
-            full = name.find(query_string)
-            if full < 0:
-                full = name.find(query_string.lower())
-                if full < 0:
-                    full = float('inf')
-
-            return fuzz.WRatio(query_string, name), full, 1 / consecutive_score, len_ratio
-
-        matches = heapq.nlargest(8, card_data.values(), key=match)
+        matches = heapq.nlargest(8, card_data.values(), key=functools.partial(match, query_string))
 
     return [InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=card.name,
                                    photo_width=223, photo_height=311)
@@ -172,8 +173,7 @@ if __name__ == '__main__':
     TOKEN = args.token
 
     bot = telepot.aio.DelegatorBot(TOKEN, [
-        pave_event_space()(
-            per_inline_from_id(), create_open, InlineHandler, timeout=20),
+        pave_event_space()(per_inline_from_id(), create_open, InlineHandler, timeout=20),
     ])
 
     loop.create_task(bot.message_loop())
