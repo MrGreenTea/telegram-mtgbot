@@ -1,27 +1,26 @@
-import argparse
-import asyncio
-import datetime
-import glob
-import heapq
+import ctypes
 import json
-import os
-import random
 import re
-import functools
+from argparse import ArgumentParser
+from datetime import datetime
+from functools import partial
+from glob import glob
+from heapq import nlargest
+from os import path
+from random import sample
 from typing import Dict
 
 import requests
 import telepot
-import telepot.aio
-from fuzzywuzzy import fuzz
 from mtgsdk import cards, sets, changelog
-from telepot.aio.delegate import per_inline_from_id, create_open, pave_event_space
-from telepot.aio.helper import InlineUserHandler, AnswererMixin
+from telepot.delegate import per_inline_from_id, create_open, pave_event_space
+from telepot.helper import InlineUserHandler, AnswererMixin
 from telepot.namedtuple import InlineQueryResultPhoto
 from toolz import dicttoolz
 from tqdm import tqdm
 
-FILE_DIR = os.path.dirname(__file__)
+RESULTS_AT_ONCE = 8
+FILE_DIR = path.dirname(__file__)
 
 set_data = {}  # type: Dict[str: sets.Set]
 card_data = {}  # type: Dict[str: cards.Card]
@@ -33,67 +32,82 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
 
     def on_inline_query(self, msg):
         def compute_answer():
-            query_id, from_id, query_string = telepot.glance(msg, flavor='inline_query')
-            print(self.id, ':', 'Inline Query:', query_id, from_id, query_string)
+            query_id, from_id, query_string, offset = telepot.glance(msg, flavor='inline_query', long=True)
+            print(self.id, ':', 'Inline Query:', query_id, from_id, query_string, 'offset: ', offset)
 
-            start_time = datetime.datetime.now()
-            articles = get_photos_from_gatherer(query_string)
-            print('took', datetime.datetime.now() - start_time)
-            return articles
+            start_time = datetime.now()
+            response = get_photos_from_gatherer(query_string, int(offset) if offset else 0)
+            print('took', datetime.now() - start_time)
+            print('next offset:', response.get('next_offset', -1))
+            return response
 
         self.answerer.answer(msg, compute_answer)
 
 
-def match(query: str, card: cards.Card):
-    name = card.name.lower()  # type: str
-    query = query.lower()
+match_lib = ctypes.cdll.LoadLibrary(path.join(FILE_DIR, 'match.so'))
 
-    consecutive_score = 0
-    for c in query:
-        try:
-            while name[consecutive_score] != c:
-                consecutive_score += 1
-        except IndexError:
-            consecutive_score = -1
-            break
-    else:
-        consecutive_score = (consecutive_score + 1) / len(query)
-    try:
-        len_ratio = 1 / len(name)
-    except ZeroDivisionError:
-        print(name)
-        len_ratio = 0
+match_lib.has_match.restype = ctypes.c_bool
+match_lib.has_match.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+
+match_lib.match.restype = ctypes.c_double
+match_lib.match.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+
+
+def convert_to_c_chars(f):
+    def _inner(a, b):
+        a = ctypes.c_char_p(bytes(a, 'utf8'))
+        b = ctypes.c_char_p(bytes(b, 'utf8'))
+        return f(a, b)
+
+    return _inner
+
+
+@convert_to_c_chars
+def has_match(needle, haystack):
+    """Return True if needle has a match in haystack."""
+    return match_lib.has_match(needle, haystack)
+
+
+@convert_to_c_chars
+def match(needle, haystack):
+    """Return match score for needle in haystack."""
+    return match_lib.match(needle, haystack)
+
+
+def match_card(query: str, card: cards.Card):
+    """Returns match score for the query and name of card."""
+    query = query.lower()
+    name = card.name.lower()
 
     full_words = len(set(name.split()).intersection(set(query.split())))
 
-    full = name.find(query)
-    if full < 0:
-        full = name.find(query)
-
-    if full >= 0:
-        full = 1 / (full + 1)
-
-    return fuzz.token_set_ratio(query, name), full_words, full, 1 / consecutive_score, len_ratio
+    return query in name, full_words, match(query, name)
 
 
-def get_photos_from_gatherer(query_string: str):
+def get_photos_from_gatherer(query_string: str, offset):
     if not query_string:
-        matches = random.sample(list(card_data.values()), 8)
+        matches = sample(list(card_data.values()), RESULTS_AT_ONCE)
+        next_offset = True
     else:
-        matches = heapq.nlargest(8, card_data.values(), key=functools.partial(match, query_string))
+        filtered_cards = [card for card in card_data.values() if has_match(query_string.lower(), card.name.lower())]
+        matches = nlargest(offset + RESULTS_AT_ONCE, filtered_cards, key=partial(match_card, query_string))[offset:]
 
-    return [InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=card.name,
-                                   photo_width=223, photo_height=311)
-            for card in matches]
+        print(len(filtered_cards))
+        next_offset = len(filtered_cards) > (offset + RESULTS_AT_ONCE)
+
+    results = [InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=card.name,
+                                      photo_width=223, photo_height=311) for card in matches]
+
+    return dict(results=results, next_offset=offset + RESULTS_AT_ONCE if next_offset else '')
 
 
 def newest_json_file():
-    all_card_json_files = glob.glob(os.path.join(FILE_DIR, 'cards_*.json'))
+    all_card_json_files = glob(path.join(FILE_DIR, 'cards_*.json'))
     highest_version = '0.0.0'
     for file in all_card_json_files:
-        file = os.path.split(file)[-1]
+        file = path.split(file)[-1]
         print(file)
-        match = re.match('cards_([0-9]+\.[0-9]+\.[0-9]+)\.json', file)
+        match = re.match(r'cards_([0-9]+\.[0-9]+\.[0-9]+)\.json', file)
         if match is None:
             continue
         version_number = match.group(1)
@@ -119,12 +133,12 @@ def is_newest_version():
 def update_set_info():
     print('Updating sets.')
     for set in sets.search():
-        set.release_date = datetime.datetime.strptime(set.release_date, '%Y-%m-%d')
+        set.release_date = datetime.strptime(set.release_date, '%Y-%m-%d')
         set_data[set.code] = set
 
 
 def update_card_info():
-    start_time = datetime.datetime.now()
+    start_time = datetime.now()
 
     total_card_count = int(requests.head('https://api.magicthegathering.io/v1/cards').headers['total-count'])
 
@@ -140,10 +154,11 @@ def update_card_info():
 
         card_data[card.name] = card
 
-    print('Updating cards took', datetime.datetime.now() - start_time)
+    print('Updating cards took', datetime.now() - start_time)
 
 
 def update_data():
+    """Has to be called manually if needed."""
     global card_data
 
     update_set_info()
@@ -152,31 +167,26 @@ def update_data():
     if not is_newest_version():
         update_card_info()
         new_version = changelog.newest_version().version
-        json_file_path = os.path.join(FILE_DIR, 'cards_{}.json'.format(new_version))
+        json_file_path = path.join(FILE_DIR, 'cards_{}.json'.format(new_version))
         with open(json_file_path, 'w') as json_file:
             json.dump(dicttoolz.valmap(lambda c: c.__dict__, card_data), json_file)
 
     else:
-        json_file_path = os.path.join(FILE_DIR, 'cards_{}.json'.format(newest_json_file()))
+        json_file_path = path.join(FILE_DIR, 'cards_{}.json'.format(newest_json_file()))
         with open(json_file_path) as json_file:
             card_data = dicttoolz.valmap(lambda d: cards.Card(**d), json.load(json_file))
 
 
-update_data()
-
 if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    parser = argparse.ArgumentParser(description='MTG Card Image Fetch Telegram Bot')
+    update_data()
+    parser = ArgumentParser(description='MTG Card Image Fetch Telegram Bot')
     parser.add_argument('token', type=str, metavar='t', help='The Telegram Bot API Token')
     args = parser.parse_args()
 
     TOKEN = args.token
 
-    bot = telepot.aio.DelegatorBot(TOKEN, [
+    bot = telepot.DelegatorBot(TOKEN, [
         pave_event_space()(per_inline_from_id(), create_open, InlineHandler, timeout=20),
     ])
 
-    loop.create_task(bot.message_loop())
-    print('Listening ...')
-
-    loop.run_forever()
+    bot.message_loop(run_forever='Listening ...')
