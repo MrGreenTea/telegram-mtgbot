@@ -33,7 +33,7 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
     def on_inline_query(self, msg):
         def compute_answer():
             query_id, from_id, query_string, offset = telepot.glance(msg, flavor='inline_query', long=True)
-            print(self.id, ':', 'Inline Query:', query_id, from_id, query_string, 'offset: ', offset)
+            print(self.id, ':', 'Inline Query:', query_id, from_id, 'query:', query_string, 'offset:', offset)
 
             start_time = datetime.now()
             try:
