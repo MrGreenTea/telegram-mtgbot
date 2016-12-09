@@ -3,7 +3,7 @@ import json
 import re
 from argparse import ArgumentParser
 from datetime import datetime
-from functools import partial
+from functools import partial, wraps
 from glob import glob
 from heapq import nlargest
 from os import path
@@ -59,6 +59,7 @@ match_lib.match.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
 
 
 def convert_to_c_chars(f):
+    @wraps(f)
     def _inner(a, b):
         a = ctypes.c_char_p(bytes(a, 'utf8'))
         b = ctypes.c_char_p(bytes(b, 'utf8'))
@@ -68,13 +69,13 @@ def convert_to_c_chars(f):
 
 
 @convert_to_c_chars
-def has_match(needle, haystack):
+def has_match(needle: str, haystack: str):
     """Return True if needle has a match in haystack."""
     return match_lib.has_match(needle, haystack)
 
 
 @convert_to_c_chars
-def match(needle, haystack):
+def match(needle: str, haystack: str):
     """Return match score for needle in haystack."""
     return match_lib.match(needle, haystack)
 
@@ -100,7 +101,7 @@ def match_card(query: str, card: cards.Card):
     return full_match, full_words, match(query, name)
 
 
-def get_photos_from_gatherer(query_string: str, offset):
+def get_photos_from_gatherer(query_string: str, offset: int=0):
     if not query_string:
         matches = sample(list(card_data.values()), RESULTS_AT_ONCE)
         next_offset = True
