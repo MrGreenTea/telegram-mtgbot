@@ -20,7 +20,7 @@ from toolz import dicttoolz
 from tqdm import tqdm
 
 RESULTS_AT_ONCE = 8
-FILE_DIR = path.dirname(__file__)
+FILE_DIR = path.dirname(path.abspath(__file__))
 
 set_data = {}  # type: Dict[str: sets.Set]
 card_data = {}  # type: Dict[str: cards.Card]
@@ -92,7 +92,6 @@ def get_photos_from_gatherer(query_string: str, offset):
         filtered_cards = [card for card in card_data.values() if has_match(query_string.lower(), card.name.lower())]
         matches = nlargest(offset + RESULTS_AT_ONCE, filtered_cards, key=partial(match_card, query_string))[offset:]
 
-        print(len(filtered_cards))
         next_offset = len(filtered_cards) > (offset + RESULTS_AT_ONCE)
 
     results = [InlineQueryResultPhoto(id=card.id, photo_url=card.image_url, thumb_url=card.image_url, caption=card.name,
