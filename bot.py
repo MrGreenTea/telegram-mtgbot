@@ -36,7 +36,12 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
             print(self.id, ':', 'Inline Query:', query_id, from_id, query_string, 'offset: ', offset)
 
             start_time = datetime.now()
-            response = get_photos_from_gatherer(query_string, int(offset) if offset else 0)
+            try:
+                response = get_photos_from_gatherer(query_string, int(offset) if offset else 0)
+            except TypeError:
+                # probably we got a wrong offset
+                print(offset, 'is not a valid offset')
+                return
             print('took', datetime.now() - start_time)
             print('next offset:', response.get('next_offset', -1))
             return response
@@ -74,14 +79,25 @@ def match(needle, haystack):
     return match_lib.match(needle, haystack)
 
 
+def common_words(a: str, b: str):
+    a_set = set(''.join(e for e in s if e.isalnum()) for s in a.split())
+    b_set = set(''.join(e for e in s if e.isalnum()) for s in b.split())
+
+    return a_set.intersection(b_set)
+
+
 def match_card(query: str, card: cards.Card):
     """Returns match score for the query and name of card."""
     query = query.lower()
     name = card.name.lower()
 
-    full_words = len(set(name.split()).intersection(set(query.split())))
+    full_words = len(common_words(query, name))
 
-    return query in name, full_words, match(query, name)
+    full_match = name.find(query)
+    if full_match >= 0:
+        full_match = 1 / (full_match + 1)
+
+    return full_match, full_words, match(query, name)
 
 
 def get_photos_from_gatherer(query_string: str, offset):
