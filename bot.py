@@ -1,5 +1,6 @@
 import ctypes
 import json
+import logging
 import re
 from argparse import ArgumentParser
 from datetime import datetime
@@ -26,6 +27,9 @@ set_data = {}  # type: Dict[str: sets.Set]
 card_data = {}  # type: Dict[str: cards.Card]
 
 
+logger = logging.getLogger(__name__)
+
+
 class InlineHandler(InlineUserHandler, AnswererMixin):
     def __init__(self, *args, **kwargs):
         super(InlineHandler, self).__init__(*args, **kwargs)
@@ -33,17 +37,19 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
     def on_inline_query(self, msg):
         def compute_answer():
             query_id, from_id, query_string, offset = telepot.glance(msg, flavor='inline_query', long=True)
-            print(self.id, ':', 'Inline Query:', query_id, from_id, 'query:', query_string, 'offset:', offset)
+            info_msg = '{}: {} from {}. Query: {} with offset: {}'.format(
+                self.id, ':', 'Inline Query:', query_id, from_id, 'query:', query_string, 'offset:', offset)
+            logger.info(info_msg)
 
             start_time = datetime.now()
             try:
                 response = get_photos_from_gatherer(query_string, int(offset) if offset else 0)
             except TypeError:
                 # probably we got a wrong offset
-                print(offset, 'is not a valid offset')
+                logger.info('{} is not a valid offset'.format(offset))
                 return
-            print('took', datetime.now() - start_time)
-            print('next offset:', response.get('next_offset', -1))
+            logger.info('took {}'.format(datetime.now() - start_time))
+            logger.info('next offset: {}'.format(response.get('next_offset', -1)))
             return response
 
         self.answerer.answer(msg, compute_answer)
@@ -92,16 +98,16 @@ def match_card(query: str, card: cards.Card):
     query = query.lower()
     name = card.name.lower()
 
-    full_words = len(common_words(query, name))
+    full_word_score = len(common_words(query, name))
 
     full_match = name.find(query)
     if full_match >= 0:
         full_match = 1 / (full_match + 1)
 
-    return full_match, full_words, match(query, name)
+    return full_match, full_word_score, match(query, name)
 
 
-def get_photos_from_gatherer(query_string: str, offset: int=0):
+def get_photos_from_gatherer(query_string: str, offset: int = 0):
     if not query_string:
         matches = sample(list(card_data.values()), RESULTS_AT_ONCE)
         next_offset = True
@@ -122,7 +128,7 @@ def newest_json_file():
     highest_version = '0.0.0'
     for file in all_card_json_files:
         file = path.split(file)[-1]
-        print(file)
+        logger.info(file)
         match = re.match(r'cards_([0-9]+\.[0-9]+\.[0-9]+)\.json', file)
         if match is None:
             continue
@@ -135,19 +141,19 @@ def newest_json_file():
 
 
 def is_newest_version():
-    print('checking for new json')
+    logger.info('checking for new json')
 
     highest_version = newest_json_file()
 
-    print(highest_version)
+    logger.info(highest_version)
 
     remote_newest_version = changelog.newest_version().version
-    print(remote_newest_version)
+    logger.info(remote_newest_version)
     return remote_newest_version == highest_version
 
 
 def update_set_info():
-    print('Updating sets.')
+    logger.info('Updating sets.')
     for set in sets.search():
         set.release_date = datetime.strptime(set.release_date, '%Y-%m-%d')
         set_data[set.code] = set
@@ -170,7 +176,7 @@ def update_card_info():
 
         card_data[card.name] = card
 
-    print('Updating cards took', datetime.now() - start_time)
+    logger.info('Updating cards took {}'.format(datetime.now() - start_time))
 
 
 def update_data():
@@ -179,7 +185,7 @@ def update_data():
 
     update_set_info()
 
-    print('Updating cards.')
+    logger.info('Updating cards.')
     if not is_newest_version():
         update_card_info()
         new_version = changelog.newest_version().version
@@ -194,10 +200,17 @@ def update_data():
 
 
 if __name__ == '__main__':
-    update_data()
     parser = ArgumentParser(description='MTG Card Image Fetch Telegram Bot')
     parser.add_argument('token', type=str, metavar='t', help='The Telegram Bot API Token')
+    parser.add_argument('--level', metavar='l', default='info', choices=[l.lower() for l in logging._nameToLevel])
     args = parser.parse_args()
+
+    logging.basicConfig(level=args.level.upper(),
+                        format='%(asctime)s | %(levelname)s: %(message)s', datefmt='%m.%d.%Y %H:%M:%S',
+                        handlers=[logging.StreamHandler(), logging.FileHandler('mtgbot_{:%Y_%m_%d_%X}.log'.format(datetime.now()))]
+                        )
+
+    update_data()
 
     TOKEN = args.token
 
