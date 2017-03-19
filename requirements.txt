@@ -1,0 +1,6 @@
+requests
+telepot
+telepot
+toolz
+tqdm
+git+https://github.com/MrGreenTea/mtgsdk
