@@ -37,7 +37,7 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
     def on_inline_query(self, msg):
         def compute_answer():
             query_id, from_id, query_string, offset = telepot.glance(msg, flavor='inline_query', long=True)
-            info_msg = '{id}: {q_id} from {f_id}. Query: {q} with offset: {off}'.format(
+            info_msg = '{id}: {q_id} from {f_id}. Query: {q!r} with offset: {off}'.format(
                     id=self.id, q_id=query_id, f_id=from_id, q=query_string, off=offset)
             logger.info(info_msg)
 
