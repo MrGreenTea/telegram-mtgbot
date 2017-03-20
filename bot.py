@@ -136,7 +136,6 @@ def newest_json_file():
         version_number = match.group(1)
         if tuple(map(int, version_number.split('.'))) > tuple(map(int, highest_version.split('.'))):
             highest_version = version_number
-            break
 
     return highest_version
 
