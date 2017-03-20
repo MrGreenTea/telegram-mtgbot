@@ -133,7 +133,7 @@ def newest_json_file():
         if match is None:
             continue
         version_number = match.group(1)
-        if any(int(x) > int(y) for x, y in zip(version_number.split('.'), highest_version.split('.'))):
+        if tuple(map(int, version_number.split('.'))) > tuple(map(int, highest_version.split('.'))):
             highest_version = version_number
             break
 
@@ -148,7 +148,7 @@ def is_newest_version():
     logger.info(highest_version)
 
     remote_newest_version = changelog.newest_version().version
-    logger.info(remote_newest_version)
+    logger.info('remote newest is: ' + remote_newest_version)
     return remote_newest_version == highest_version
 
 
