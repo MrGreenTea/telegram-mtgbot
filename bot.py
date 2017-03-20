@@ -125,6 +125,7 @@ def get_photos_from_gatherer(query_string: str, offset: int = 0):
 
 def newest_json_file():
     all_card_json_files = glob(path.join(FILE_DIR, 'cards_*.json'))
+    logger.debug(all_card_json_files)
     highest_version = '0.0.0'
     for file in all_card_json_files:
         file = path.split(file)[-1]
