@@ -1,17 +1,20 @@
 import logging
+from itertools import zip_longest
 from urllib import parse
 from argparse import ArgumentParser
 from contextlib import contextmanager
 from datetime import datetime
 from functools import lru_cache
 
+from cachetools import LRUCache
 import requests
 import telepot
 from telepot.delegate import per_inline_from_id, create_open, pave_event_space
 from telepot.helper import InlineUserHandler, AnswererMixin
 from telepot.namedtuple import InlineQueryResultPhoto, InlineKeyboardButton, InlineKeyboardMarkup
 
-RESULTS_AT_ONCE = 10
+RESULTS_AT_ONCE = 25
+CACHE_SIZE = 128
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +38,7 @@ def timer(msg=None, logger=LOGGER):
 class InlineHandler(InlineUserHandler, AnswererMixin):
     def __init__(self, *args, **kwargs):
         super(InlineHandler, self).__init__(*args, **kwargs)
+        self.cache = LRUCache(maxsize=CACHE_SIZE)
 
     def on_inline_query(self, msg):
         def compute_answer():
@@ -43,6 +47,14 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
                                                                                           f_id=from_id, q=query_string,
                                                                                           off=offset)
             LOGGER.info(info_msg)
+
+            if not query_string:
+                try:
+                    query_string = self.cache[from_id]
+                except KeyError:
+                    LOGGER.info('No saved query for {}'.format(from_id))
+                else:
+                    LOGGER.info('Returning results for last query string: {!r}'.format(query_string))
 
             try:
                 _off = int(offset) if offset else 0
@@ -55,44 +67,52 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
                     response = get_photos_from_scryfall(query_string, _off)
 
             LOGGER.info('next offset: {}'.format(response.get('next_offset', -1)))
+
+            if response['results']:
+                self.cache[from_id] = query_string
+                LOGGER.info('Saved query: {!r} for user {f_id}'.format(query_string, f_id=from_id))
+
             return response
 
         self.answerer.answer(msg, compute_answer)
 
 
-@lru_cache()
+def paginate_iterator(it, chunk_size):
+    _fill_value = object()
+    iters = [iter(it)] * chunk_size
+    for chunk in zip_longest(*iters, fillvalue=_fill_value):
+        yield (i for i in chunk if i is not _fill_value)
+
+
+@lru_cache(maxsize=CACHE_SIZE)
 def paginate(query_string, packet_size=25):
     """Iterate in packs of packet_size over search results."""
-    quoted_url = parse.urljoin('https://api.scryfall.com/cards/search/', '?q=' + parse.quote_plus(query_string))
-    while quoted_url is not None:
-        req = requests.get(quoted_url)
-        try:
-            req.raise_for_status()
-        except requests.HTTPError:
-            return
+    url = parse.urljoin('https://api.scryfall.com/cards/search/', '?q=' + parse.quote_plus(query_string))
+    while url is not None:
+        req = requests.get(url)
+        req.raise_for_status()
+
         json = req.json()
         matches = json['data']
-        quoted_url = json.get('next_page', None)
-        for i in range(0, len(matches), packet_size):
-            yield matches[i:i + packet_size]
+        url = json.get('next_page', None)
+        yield from paginate_iterator(matches, packet_size)
 
 
 def inline_photo_from_card(card):
     """Build a InlineQueryResultPhoto from the given card dict."""
-    def markup_keyboard():
-        return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=card['name'],
-                                                                           url=card['scryfall_uri'])]])
+    markup_keyboard = InlineKeyboardMarkup(inline_keyboard=[[  # looks quite awkward. Is a list of lists for button rows
+        InlineKeyboardButton(text=card['name'], url=card['scryfall_uri'])]])
 
     return InlineQueryResultPhoto(id=card['id'], photo_url=card['image_uri'], thumb_url=card['image_uri'],
-                                  photo_width=336, photo_height=469, reply_markup=markup_keyboard())
+                                  photo_width=336, photo_height=469, reply_markup=markup_keyboard)
 
 
 def get_photos_from_scryfall(query_string: str, offset: int=0):
     """Return photos for query_string."""
-    if not query_string:
-        matches = [requests.get('https://api.scryfall.com/cards/random').json() for _ in range(10)]
-    else:
+    try:
         matches = next(paginate(query_string, packet_size=RESULTS_AT_ONCE), [])
+    except requests.HTTPError:  # we silently ignore 404 and other errors
+        matches = []
 
     results = [inline_photo_from_card(card) for card in matches]
     return dict(results=results, next_offset=offset + 1 if matches else '')
