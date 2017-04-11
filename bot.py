@@ -1,20 +1,20 @@
 import logging
-from itertools import zip_longest
-from urllib import parse
 from argparse import ArgumentParser
 from contextlib import contextmanager
 from datetime import datetime
 from functools import lru_cache
+from itertools import zip_longest
+from urllib import parse
 
-from cachetools import LRUCache
 import requests
 import telepot
+from cachetools import LRUCache
 from telepot.delegate import per_inline_from_id, create_open, pave_event_space
 from telepot.helper import InlineUserHandler, AnswererMixin
 from telepot.namedtuple import InlineQueryResultPhoto, InlineKeyboardButton, InlineKeyboardMarkup
 
 RESULTS_AT_ONCE = 25
-CACHE_SIZE = 128
+CACHE_SIZE = 32
 
 LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
                     query_string = self.cache[from_id]
                 except KeyError:
                     LOGGER.info('No saved query for {}'.format(from_id))
+                    raise
                 else:
                     LOGGER.info('Returning results for last query string: {!r}'.format(query_string))
 
@@ -77,6 +78,36 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
         self.answerer.answer(msg, compute_answer)
 
 
+class Results(list):
+    def __init__(self, query, chunk_size=RESULTS_AT_ONCE):
+        super(Results, self).__init__()
+        self.query = query
+        self.search_url = parse.urljoin('https://api.scryfall.com/cards/search/',
+                                        '?q=' + parse.quote_plus(query) + ' include:extras')
+        self.next_url = self.search_url
+        self.chunk_size = chunk_size
+
+    def get_url(self, url):
+        req = requests.get(url)
+        req.raise_for_status()
+        json = req.json()
+        return json
+
+    def __getitem__(self, item):
+        if item >= len(self):
+            if self.next_url is not None:
+                json = self.get_url(self.next_url)
+                self.extend(list(p) for p in paginate_iterator(json['data'], self.chunk_size))
+                self.next_url = json.get('next_page', None)
+            else:
+                raise IndexError('{!r} has no page {} for chunk_size={}'.format(self, item, self.chunk_size))
+
+        return super(Results, self).__getitem__(item)
+
+    def __repr__(self):
+        return '{}.{}({!r}, {!r})'.format(__name__, self.__class__.__name__, self.query, self.chunk_size)
+
+
 def paginate_iterator(it, chunk_size):
     _fill_value = object()
     iters = [iter(it)] * chunk_size
@@ -87,35 +118,30 @@ def paginate_iterator(it, chunk_size):
 @lru_cache(maxsize=CACHE_SIZE)
 def paginate(query_string, packet_size=25):
     """Iterate in packs of packet_size over search results."""
-    url = parse.urljoin('https://api.scryfall.com/cards/search/', '?q=' + parse.quote_plus(query_string))
-    while url is not None:
-        req = requests.get(url)
-        req.raise_for_status()
-
-        json = req.json()
-        matches = json['data']
-        url = json.get('next_page', None)
-        yield from paginate_iterator(matches, packet_size)
+    return Results(query_string, chunk_size=packet_size)
 
 
-def inline_photo_from_card(card):
+def inline_photo_from_card(card, search_url):
     """Build a InlineQueryResultPhoto from the given card dict."""
     markup_keyboard = InlineKeyboardMarkup(inline_keyboard=[[  # looks quite awkward. Is a list of lists for button rows
-        InlineKeyboardButton(text=card['name'], url=card['scryfall_uri'])]])
+        InlineKeyboardButton(text=card['name'], url=card['scryfall_uri'])],
+        InlineKeyboardButton(text='go to search', url=search_url)])
 
     return InlineQueryResultPhoto(id=card['id'], photo_url=card['image_uri'], thumb_url=card['image_uri'],
                                   photo_width=336, photo_height=469, reply_markup=markup_keyboard)
 
 
-def get_photos_from_scryfall(query_string: str, offset: int=0):
+def get_photos_from_scryfall(query_string: str, offset: int = 0):
     """Return photos for query_string."""
     try:
-        matches = next(paginate(query_string, packet_size=RESULTS_AT_ONCE), [])
-    except requests.HTTPError:  # we silently ignore 404 and other errors
-        matches = []
+        cards = paginate(query_string, packet_size=RESULTS_AT_ONCE)
+        results = [inline_photo_from_card(card, cards.search_url) for card in cards[offset]]
+        next_offset = offset + 1
+    except (requests.HTTPError, IndexError):  # we silently ignore 404 and other errors
+        next_offset = ''
+        results = []
 
-    results = [inline_photo_from_card(card) for card in matches]
-    return dict(results=results, next_offset=offset + 1 if matches else '')
+    return dict(results=results, next_offset=next_offset)
 
 
 def run_bot():
@@ -128,8 +154,8 @@ def run_bot():
                         format='%(asctime)s | %(levelname)s: %(message)s', datefmt='%m.%d.%Y %H:%M:%S',
                         handlers=[logging.StreamHandler(),
                                   logging.FileHandler('mtgbot_{:%Y_%m_%d_%X}.log'.format(datetime.now()))
-                                 ]
-                       )
+                                  ]
+                        )
 
     bot = telepot.DelegatorBot(args.token, [
         pave_event_space()(per_inline_from_id(), create_open, InlineHandler, timeout=20),
