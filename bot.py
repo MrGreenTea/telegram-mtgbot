@@ -2,13 +2,12 @@ import logging
 from argparse import ArgumentParser
 from contextlib import contextmanager
 from datetime import datetime
-from functools import lru_cache
 from itertools import zip_longest
 from urllib import parse
 
 import requests
 import telepot
-from cachetools import LRUCache
+from cachetools import TTLCache, LRUCache, cached
 from telepot.delegate import per_inline_from_id, create_open, pave_event_space
 from telepot.helper import InlineUserHandler, AnswererMixin
 from telepot.namedtuple import InlineQueryResultPhoto, InlineKeyboardButton, InlineKeyboardMarkup
@@ -72,6 +71,7 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
             if response['results']:
                 self.cache[from_id] = query_string
                 LOGGER.info('Saved query: {!r} for user {f_id}'.format(query_string, f_id=from_id))
+                LOGGER.info('Saved {} results'.format(len(response['results'])))
 
             return response
 
@@ -83,7 +83,7 @@ class Results(list):
         super(Results, self).__init__()
         self.query = query
         self.search_url = parse.urljoin('https://api.scryfall.com/cards/search/',
-                                        '?q=' + parse.quote_plus(query) + ' include:extras')
+                                        '?q=' + parse.quote_plus(query + ' include:extras'))
         self.next_url = self.search_url
         self.chunk_size = chunk_size
 
@@ -115,17 +115,16 @@ def paginate_iterator(it, chunk_size):
         yield (i for i in chunk if i is not _fill_value)
 
 
-@lru_cache(maxsize=CACHE_SIZE)
+@cached(cache=TTLCache(CACHE_SIZE, 60*60*24))
 def paginate(query_string, packet_size=25):
     """Iterate in packs of packet_size over search results."""
     return Results(query_string, chunk_size=packet_size)
 
 
-def inline_photo_from_card(card, search_url):
+def inline_photo_from_card(card):
     """Build a InlineQueryResultPhoto from the given card dict."""
     markup_keyboard = InlineKeyboardMarkup(inline_keyboard=[[  # looks quite awkward. Is a list of lists for button rows
-        InlineKeyboardButton(text=card['name'], url=card['scryfall_uri'])],
-        InlineKeyboardButton(text='go to search', url=search_url)])
+        InlineKeyboardButton(text=card['name'], url=card['scryfall_uri'])]])
 
     return InlineQueryResultPhoto(id=card['id'], photo_url=card['image_uri'], thumb_url=card['image_uri'],
                                   photo_width=336, photo_height=469, reply_markup=markup_keyboard)
@@ -135,7 +134,7 @@ def get_photos_from_scryfall(query_string: str, offset: int = 0):
     """Return photos for query_string."""
     try:
         cards = paginate(query_string, packet_size=RESULTS_AT_ONCE)
-        results = [inline_photo_from_card(card, cards.search_url) for card in cards[offset]]
+        results = [inline_photo_from_card(card) for card in cards[offset]]
         next_offset = offset + 1
     except (requests.HTTPError, IndexError):  # we silently ignore 404 and other errors
         next_offset = ''
