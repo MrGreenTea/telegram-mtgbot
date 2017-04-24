@@ -1,0 +1,11 @@
+## logs
+*.log
+
+## cache dirs/files
+__pycache__/
+**/.cache/
+**/.hypothesis/
+
+## ide
+.idea/
+
