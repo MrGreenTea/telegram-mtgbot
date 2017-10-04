@@ -54,8 +54,10 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
             if not query_string:
                 LOGGER.info(f'Getting 10 random for {from_id}')
                 with timer():
-                    randoms = [inline_photo_from_card(requests.get('https://api.scryfall.com/cards/random').json())
-                               for _ in range(10)]
+                    randoms = []
+                    for _ in range(10):
+                        randoms.extend(
+                            inline_photo_from_card(requests.get('https://api.scryfall.com/cards/random').json()))
                 response = {'results': randoms,
                             'next_offset': _off + 1
                             }
