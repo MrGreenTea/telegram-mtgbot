@@ -82,7 +82,7 @@ class Results(list):
         super(Results, self).__init__()
         self.query = query
         self.search_url = parse.urljoin('https://api.scryfall.com/cards/search/',
-                                        '?q=' + parse.quote_plus(query + ' include:extras'))
+                                        '?order=edhrec&q=' + parse.quote_plus(query + ' include:extras'))
         self.next_url = self.search_url
         self.chunk_size = chunk_size
 
@@ -132,7 +132,7 @@ def inline_photo_from_card(card):
         for face in card['card_faces']:
             args = dict(**arguments,
                         photo_url=face['image_uris']['png'], thumb_url=face['image_uris']['small'])
-            args['id'] = ''.join(e for e in f"{card_id}-{face['name']}" if e.isalnum())
+            args['id'] = ''.join(e for e in f"{card['id']}-{face['name']}" if e.isalnum())
             yield InlineQueryResultPhoto(**args)
 
 
