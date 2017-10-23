@@ -7,7 +7,6 @@ from urllib import parse
 
 import requests
 import telepot
-from cachetools import TTLCache, LRUCache, cached
 from telepot.delegate import per_inline_from_id, create_open, pave_event_space
 from telepot.helper import InlineUserHandler, AnswererMixin
 from telepot.namedtuple import InlineQueryResultPhoto, InlineKeyboardButton, InlineKeyboardMarkup
@@ -37,12 +36,12 @@ def timer(msg=None, logger=LOGGER):
 class InlineHandler(InlineUserHandler, AnswererMixin):
     def __init__(self, *args, **kwargs):
         super(InlineHandler, self).__init__(*args, **kwargs)
-        self.cache = LRUCache(maxsize=CACHE_SIZE)
 
     def on_inline_query(self, msg):
         def compute_answer():
+            username = msg['from']['username']
             query_id, from_id, query_string, offset = telepot.glance(msg, flavor='inline_query', long=True)
-            LOGGER.info(f'{self.id}: {query_id} from {from_id}. Query: {query_id!r} with offset: {offset}')
+            LOGGER.info(f'{self.id}: {query_id} from {username}. Query: {query_id!r} with offset: {offset}')
 
             try:
                 _off = int(offset) if offset else 0
@@ -52,25 +51,18 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
                 return dict(results=[], next_offset='')
 
             if not query_string:
-                LOGGER.info(f'Getting 10 random for {from_id}')
                 with timer():
-                    randoms = []
-                    for _ in range(10):
-                        randoms.extend(
-                            inline_photo_from_card(requests.get('https://api.scryfall.com/cards/random').json()))
-                response = {'results': randoms,
-                            'next_offset': _off + 1
-                            }
+                    random_photo = []
+                    for _ in range(5):
+                        random_photo.extend(inline_photo_from_card(requests.get('https://api.scryfall.com/cards/random').json()))
+                    response = {'results': random_photo,
+                                'next_offset': _off + 1
+                                }
             else:
                 with timer():
                     response = get_photos_from_scryfall(query_string, _off)
 
                 LOGGER.info(f'next offset: {response.get("next_offset", -1)}')
-
-                if response['results']:
-                    self.cache[from_id] = query_string
-                    LOGGER.info(f'Saved query: {query_string!r} for user {from_id}')
-                    LOGGER.info(f'Saved {len(response["results"])} results')
 
             return response
 
