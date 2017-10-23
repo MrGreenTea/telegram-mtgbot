@@ -41,7 +41,7 @@ class InlineHandler(InlineUserHandler, AnswererMixin):
         def compute_answer():
             username, first_name = msg['from']['username'], msg['from']['first_name']
             query_id, from_id, query_string, offset = telepot.glance(msg, flavor='inline_query', long=True)
-            LOGGER.info(f'{self.id}: Query {query_id} from {first_name}({username}) with offset: {offset}')
+            LOGGER.info(f'{self.id}: Query {query_string} from {first_name}({username}) with offset: {offset}')
 
             try:
                 _off = int(offset) if offset else 0
